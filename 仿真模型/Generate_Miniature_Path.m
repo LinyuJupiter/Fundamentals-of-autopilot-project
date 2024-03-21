@@ -1,0 +1,193 @@
+clear;clc;
+%% 此文件是从地图上自动寻路并输出缩小后路径的，需修改pathnums
+pathnums='6';
+m = matfile(['地图与路径/sysu_standard',pathnums,'.mat']);
+before_map=m.map;
+s=0.2;
+map = imresize(before_map,s);
+ormap=map;
+se=strel('disk',round(20*s));
+ormap=~imdilate(ormap,se);
+% 地图大小
+[mapWidth,mapHeight] = size(ormap);
+
+% 起始点和目标点
+startX = round(520*s);
+startY = round(200*s);
+goalX = round(150*s);
+goalY = round(1130*s);
+
+% 定义运动方向的角度
+motionAngles = [0, pi/4, -pi/4, pi/2, -pi/2, pi, 3*pi/4, -3*pi/4];
+
+% 定义运动的代价（每个方向的代价可以根据具体需求进行调整）
+motionCosts = [1, 1, 1, 1, 1, sqrt(2),1, sqrt(2)];
+
+% 初始化算法参数
+openList = [];
+closedList = [];
+startNode = createNode(startX, startY, 0, heuristic(startX, startY, goalX, goalY));
+openList = [openList, startNode];
+times=0;
+diy=0;
+% 开始Hybrid A*算法
+while ~isempty(openList)
+    times=times+1;
+    if mod(times,1000)==0 % 迭代次数
+        disp(times)
+    end
+    if times==20000 % 防止死循环
+        break
+    end
+    % 从openList中选择具有最小代价的节点
+    [currentNode,maxNode] = getNodeWithMinCost(openList);
+    
+    % 如果当前节点是目标节点，则路径规划完成
+    if currentNode.x==goalX && currentNode.y==goalY
+        openList = removeNode(openList, currentNode);
+        closedList = [closedList, currentNode];
+        break;
+    end
+    
+    % 将当前节点从openList移至closedList
+    openList = removeNode(openList, currentNode);
+    closedList = [closedList, currentNode];
+    if times>300
+        if diy<size(openList,2)
+            openList = removeNode(openList, maxNode);
+            diy=size(openList,2);
+        end
+    end
+    % 扩展当前节点的邻居节点
+    neighborNodes = getNeighborNodes(currentNode, mapWidth, mapHeight, ormap, motionAngles);
+    for i = 1:length(neighborNodes)
+        neighborNode = neighborNodes(i);
+        
+        % 如果邻居节点已经在closedList中，则忽略
+        if isNodeInList(closedList, neighborNode)
+            continue;
+        end
+        
+        % 计算邻居节点的代价
+        neighborNode.g = currentNode.g + motionCosts(neighborNode.phi);
+        neighborNode.h = heuristic(neighborNode.x, neighborNode.y, goalX, goalY);
+        neighborNode.f = neighborNode.g + neighborNode.h;
+        
+        % 如果邻居节点已经在openList中，则更新其代价
+        openList = updateNodeCost(openList, neighborNode);
+        
+        % 如果邻居节点不在openList中，则加入openList
+        if ~isNodeInList(openList, neighborNode)
+            openList = [openList, neighborNode];
+        end
+    end
+end
+
+% 回溯生成路径
+path = [];
+%currentNode = closedList(end);
+while ~isempty(currentNode.parent)
+    path = [currentNode.x, currentNode.y, currentNode.phi; path];
+    currentNode = currentNode.parent;
+end
+path=[[startX,startY,0];path];
+% 打印路径
+disp(path);
+% 创建地图的可视化图像
+mapImage = ones(mapWidth, mapHeight, 3); % 白色表示可通行区域
+mapImage(~map == 0) = 0; % 将障碍物和墙标记为黑色
+
+% 绘制起始点和目标点
+aa=round(15*mapWidth/600);
+mapImage(startX-aa:startX+aa, startY-aa:startY+aa, 1)=0;
+mapImage(startX-aa:startX+aa, startY-aa:startY+aa, 2) = 1; % 绿色表示起始点
+mapImage(startX-aa:startX+aa, startY-aa:startY+aa, 3)=0;
+mapImage(goalX-aa:goalX+aa, goalY-aa:goalY+aa, 1)=1;
+mapImage(goalX-aa:goalX+aa, goalY-aa:goalY+aa, 2) = 0; % 绿色表示起始点
+mapImage(goalX-aa:goalX+aa, goalY-aa:goalY+aa, 3)=0;
+
+% 绘制路径
+for i = 1:size(path, 1)
+    x = path(i, 1);
+    y = path(i, 2);
+    mapImage(x, y, :) = [0 0 1]; % 蓝色表示路径上的点
+end
+
+% 显示地图图像
+imshow(mapImage);
+hold on;
+for i =1:size(path,1)-1
+    line([path(i,2) path(i+1,2)], [path(i,1) path(i+1,1)], 'Color', 'b')
+end
+save(['地图与路径/path',pathnums,'.mat'],'path')
+
+%% 创建节点的函数
+function node = createNode(x, y, phi, h)
+    node.x = x;
+    node.y = y;
+    node.phi = phi;
+    node.g = 0;
+    node.h = h;
+    node.f = h;
+    node.parent = [];
+end
+
+%% 计算启发式函数的函数（这里使用曼哈顿距离作为启发式函数）
+function h = heuristic(x, y, goalX, goalY)
+    h = abs(x - goalX) + abs(y - goalY);
+end
+
+%% 获取具有最小代价的节点的函数
+function [node,nodemax] = getNodeWithMinCost(nodeList)
+    minCost = Inf;
+    maxCost = 0;
+    for i = 1:length(nodeList)
+        if nodeList(i).f < minCost
+            minCost = nodeList(i).f;
+            node = nodeList(i);
+        end
+        if nodeList(i).f> maxCost
+            maxCost = nodeList(i).f;
+            nodemax = nodeList(i);
+        end
+    end
+end
+
+%% 从节点列表中移除特定节点的函数
+function nodeList = removeNode(nodeList, node)
+    nodeList = nodeList([nodeList.x] ~= node.x | [nodeList.y] ~= node.y);
+end
+
+%% 检查节点是否在节点列表中的函数
+function isInList = isNodeInList(nodeList, node)
+    isInList = any([nodeList.x] == node.x & [nodeList.y] == node.y);
+end
+
+%% 更新节点代价的函数
+function nodeList = updateNodeCost(nodeList, node)
+    for i = 1:length(nodeList)
+        if nodeList(i).x == node.x && nodeList(i).y == node.y && nodeList(i).f > node.f
+            nodeList(i).g = node.g;
+            nodeList(i).h = node.h;
+            nodeList(i).f = node.f;
+            nodeList(i).parent = node.parent;
+            break;
+        end
+    end
+end
+
+%% 获取邻居节点的函数
+function neighborNodes = getNeighborNodes(node, mapWidth, mapHeight, map, motionAngles)
+    neighborNodes = [];
+    for i = 1:length(motionAngles)
+        phi = motionAngles(i);   
+        newX = floor(node.x + 2.5*cos(phi));
+        newY = floor(node.y + 2.5*sin(phi));               
+        % 检查邻居节点是否在地图范围内，并且可通行
+        if newX >= 1 && newX <= mapWidth && newY >= 1 && newY <= mapHeight && map(newX, newY) == 1
+            neighborNode = createNode(newX, newY, i, 0);
+            neighborNode.parent = node;
+            neighborNodes = [neighborNodes, neighborNode];
+        end
+    end
+end
